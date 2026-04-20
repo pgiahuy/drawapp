@@ -209,6 +209,33 @@
       gap: 12px;
     }
 
+    .controls.hidden-completely {
+      display: none;
+    }
+
+    .controls-toggle {
+      appearance: none;
+      position: absolute;
+      right: 14px;
+      bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+      z-index: 5;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(7, 10, 14, 0.72);
+      color: var(--text);
+      font: inherit;
+      padding: 10px 14px;
+      border-radius: 999px;
+      min-height: 42px;
+      cursor: pointer;
+      backdrop-filter: blur(12px) saturate(140%);
+      box-shadow: var(--shadow);
+      transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+    }
+
+    .controls-toggle:active {
+      transform: translateY(1px) scale(0.99);
+    }
+
     .controls-row {
       display: grid;
       grid-template-columns: 1fr auto auto;
@@ -326,6 +353,7 @@
         </div>
         <input id="fileInput" type="file" accept="image/*" />
       </div>
+      <button class="controls-toggle" id="controlsToggleButton" type="button" aria-expanded="true">Hide controls</button>
     </div>
   </div>
 
@@ -341,12 +369,15 @@
     const opacityValue = document.getElementById('opacityValue');
     const uploadButton = document.getElementById('uploadButton');
     const fileInput = document.getElementById('fileInput');
+    const controlsPanel = document.getElementById('controlsPanel');
+    const controlsToggleButton = document.getElementById('controlsToggleButton');
 
     let cameraStream = null;
     let overlayVisible = true;
     let imageLoaded = false;
     let renderPending = false;
     let rafId = 0;
+    let controlsVisible = true;
 
     const transform = {
       x: 0,
@@ -407,6 +438,13 @@
     function setOverlayVisible(visible) {
       overlayVisible = visible;
       overlayShell.classList.toggle('hidden', !visible);
+    }
+
+    function setControlsVisible(visible) {
+      controlsVisible = visible;
+      controlsPanel.classList.toggle('hidden-completely', !visible);
+      controlsToggleButton.textContent = visible ? 'Hide controls' : 'Show controls';
+      controlsToggleButton.setAttribute('aria-expanded', String(visible));
     }
 
     function loadImageFromFile(file) {
@@ -592,6 +630,10 @@
       fileInput.value = '';
     });
 
+    controlsToggleButton.addEventListener('click', () => {
+      setControlsVisible(!controlsVisible);
+    });
+
     async function startCamera() {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         setStatus('<strong>Camera unavailable.</strong> This browser does not support camera access.', 'error');
@@ -647,6 +689,7 @@
 
     updateOpacity(Number(opacitySlider.value));
     setOverlayVisible(true);
+    setControlsVisible(true);
     overlayImage.style.display = 'none';
     overlayPlaceholder.style.display = 'grid';
     centerOverlay();
