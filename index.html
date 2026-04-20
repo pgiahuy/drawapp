@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0f14" />
+  <title>Trace Camera</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --panel: rgba(8, 12, 18, 0.72);
+      --panel-border: rgba(255, 255, 255, 0.12);
+      --text: #f4f7fb;
+      --muted: rgba(244, 247, 251, 0.72);
+      --accent: #68d5ff;
+      --accent-strong: #9cf0ff;
+      --danger: #ff8f8f;
+      --shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      overscroll-behavior: none;
+    }
+
+    .app {
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(circle at top, rgba(104, 213, 255, 0.12), transparent 38%),
+        linear-gradient(180deg, #0b0f14 0%, #070a0f 100%);
+    }
+
+    .camera-layer,
+    .overlay-layer,
+    .hud {
+      position: absolute;
+      inset: 0;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #000;
+      transform: scaleX(-1);
+    }
+
+    .scrim {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(8, 12, 18, 0.12), rgba(8, 12, 18, 0.28) 70%, rgba(8, 12, 18, 0.52));
+      pointer-events: none;
+    }
+
+    .status {
+      position: absolute;
+      top: calc(env(safe-area-inset-top, 0px) + 14px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(92vw, 620px);
+      padding: 12px 14px;
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      background: rgba(6, 10, 16, 0.48);
+      backdrop-filter: blur(16px) saturate(140%);
+      color: var(--text);
+      box-shadow: var(--shadow);
+      font-size: 14px;
+      line-height: 1.4;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      pointer-events: none;
+    }
+
+    .status strong {
+      color: var(--accent-strong);
+      font-weight: 700;
+    }
+
+    .status.error {
+      color: #ffe3e3;
+      border-color: rgba(255, 143, 143, 0.35);
+      background: rgba(50, 8, 14, 0.54);
+    }
+
+    .status::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      margin-top: 4px;
+      border-radius: 999px;
+      background: var(--accent);
+      flex: 0 0 auto;
+      box-shadow: 0 0 0 4px rgba(104, 213, 255, 0.14);
+    }
+
+    .status.error::before {
+      background: var(--danger);
+      box-shadow: 0 0 0 4px rgba(255, 143, 143, 0.12);
+    }
+
+    .overlay-layer {
+      pointer-events: none;
+    }
+
+    .overlay-shell {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform-origin: center center;
+      transform: translate(-50%, -50%) translate3d(0, 0, 0) rotate(0deg) scale(1);
+      touch-action: none;
+      pointer-events: auto;
+      will-change: transform;
+      filter: drop-shadow(0 24px 40px rgba(0, 0, 0, 0.35));
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    .overlay-shell.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .overlay-frame {
+      position: relative;
+      display: inline-block;
+      border-radius: 18px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      cursor: grab;
+    }
+
+    .overlay-shell.dragging .overlay-frame {
+      cursor: grabbing;
+    }
+
+    .overlay-frame img {
+      display: block;
+      max-width: min(84vw, 720px);
+      max-height: min(74vh, 840px);
+      width: auto;
+      height: auto;
+      opacity: var(--overlay-opacity, 0.4);
+      user-select: none;
+      pointer-events: none;
+      -webkit-user-drag: none;
+    }
+
+    .overlay-placeholder {
+      display: grid;
+      place-items: center;
+      width: min(78vw, 520px);
+      height: min(60vh, 620px);
+      color: rgba(244, 247, 251, 0.72);
+      text-align: center;
+      padding: 24px;
+      background:
+        radial-gradient(circle at 30% 30%, rgba(104, 213, 255, 0.14), transparent 35%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+      border: 1px dashed rgba(255, 255, 255, 0.14);
+      border-radius: 18px;
+      backdrop-filter: blur(4px);
+    }
+
+    .overlay-placeholder h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      color: #ffffff;
+      letter-spacing: 0.01em;
+    }
+
+    .overlay-placeholder p {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .controls {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 14px 14px calc(env(safe-area-inset-bottom, 0px) + 14px);
+      background: linear-gradient(180deg, rgba(7, 10, 14, 0.06), rgba(7, 10, 14, 0.8) 18%, rgba(7, 10, 14, 0.94));
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(18px) saturate(145%);
+      display: grid;
+      gap: 12px;
+    }
+
+    .controls-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .control-group {
+      display: grid;
+      gap: 6px;
+    }
+
+    .label {
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .slider {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .value {
+      font-size: 12px;
+      color: var(--text);
+      opacity: 0.88;
+      min-width: 34px;
+      text-align: right;
+    }
+
+    .button,
+    .toggle,
+    .file-trigger {
+      appearance: none;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text);
+      font: inherit;
+      padding: 12px 14px;
+      border-radius: 14px;
+      min-height: 46px;
+      cursor: pointer;
+      transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+      white-space: nowrap;
+    }
+
+    .button:active,
+    .toggle:active,
+    .file-trigger:active {
+      transform: translateY(1px) scale(0.99);
+    }
+
+    .button.primary,
+    .file-trigger {
+      background: linear-gradient(180deg, rgba(104, 213, 255, 0.22), rgba(104, 213, 255, 0.1));
+      border-color: rgba(104, 213, 255, 0.36);
+    }
+
+    .toggle.active {
+      border-color: rgba(156, 240, 255, 0.42);
+      background: rgba(104, 213, 255, 0.16);
+      color: #ffffff;
+    }
+
+    .instruction-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .instruction-row strong {
+      color: var(--text);
+    }
+
+    input[type="file"] {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+
+    @media (max-width: 720px) {
+      .controls-row {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .controls-row > :first-child {
+        grid-column: 1 / -1;
+      }
+
+      .instruction-row {
+        flex-direction: column;
+      }
+
+      .status {
+        width: calc(100vw - 24px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="camera-layer">
+      <video id="camera" autoplay muted playsinline webkit-playsinline></video>
+      <div class="scrim"></div>
+    </div>
+
+    <div class="overlay-layer" id="overlayLayer">
+      <div class="overlay-shell" id="overlayShell" aria-label="Tracing overlay">
+        <div class="overlay-frame" id="overlayFrame">
+          <img id="overlayImage" alt="Uploaded tracing overlay" draggable="false" />
+          <div class="overlay-placeholder" id="overlayPlaceholder">
+            <div>
+              <h2>No image loaded</h2>
+              <p>Upload a drawing to place it over the camera view, then drag or pinch to trace.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hud">
+      <div class="status" id="statusBox">
+        <div id="statusText"><strong>Ready.</strong> Allow camera access and upload an image to begin tracing.</div>
+      </div>
+
+      <div class="controls">
+        <div class="instruction-row">
+          <div><strong>Instructions:</strong> upload an image, drag it into place, pinch to zoom, and trace over the live camera feed.</div>
+          <div id="cameraState">Camera: starting…</div>
+        </div>
+
+        <div class="controls-row">
+          <div class="control-group">
+            <div class="label">Overlay opacity</div>
+            <input class="slider" id="opacitySlider" type="range" min="0" max="1" step="0.01" value="0.4" />
+          </div>
+          <div class="value" id="opacityValue">0.40</div>
+          <button class="button primary" id="uploadButton" type="button">Upload image</button>
+          <button class="button" id="resetButton" type="button">Reset position</button>
+          <button class="toggle active" id="visibilityButton" type="button" aria-pressed="true">Hide overlay</button>
+        </div>
+        <input id="fileInput" type="file" accept="image/*" />
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const camera = document.getElementById('camera');
+    const statusBox = document.getElementById('statusBox');
+    const statusText = document.getElementById('statusText');
+    const cameraState = document.getElementById('cameraState');
+    const overlayShell = document.getElementById('overlayShell');
+    const overlayFrame = document.getElementById('overlayFrame');
+    const overlayImage = document.getElementById('overlayImage');
+    const overlayPlaceholder = document.getElementById('overlayPlaceholder');
+    const opacitySlider = document.getElementById('opacitySlider');
+    const opacityValue = document.getElementById('opacityValue');
+    const uploadButton = document.getElementById('uploadButton');
+    const resetButton = document.getElementById('resetButton');
+    const visibilityButton = document.getElementById('visibilityButton');
+    const fileInput = document.getElementById('fileInput');
+
+    let cameraStream = null;
+    let overlayVisible = true;
+    let imageLoaded = false;
+    let renderPending = false;
+    let rafId = 0;
+
+    const transform = {
+      x: 0,
+      y: 0,
+      scale: 1,
+      rotation: 0,
+    };
+
+    const gesture = {
+      mode: null,
+      startX: 0,
+      startY: 0,
+      startDistance: 0,
+      startAngle: 0,
+      startScale: 1,
+      startRotation: 0,
+      startCenterX: 0,
+      startCenterY: 0,
+      baseX: 0,
+      baseY: 0,
+      pointerId: null,
+    };
+
+    function setStatus(message, kind = 'info') {
+      statusText.innerHTML = message;
+      statusBox.classList.toggle('error', kind === 'error');
+    }
+
+    function setCameraState(message) {
+      cameraState.textContent = message;
+    }
+
+    function updateOpacity(value) {
+      const clamped = Math.min(1, Math.max(0, value));
+      opacitySlider.value = String(clamped);
+      opacityValue.textContent = clamped.toFixed(2);
+      overlayShell.style.setProperty('--overlay-opacity', String(clamped));
+    }
+
+    function scheduleRender() {
+      if (renderPending) {
+        return;
+      }
+
+      renderPending = true;
+      rafId = requestAnimationFrame(() => {
+        renderPending = false;
+        overlayShell.style.transform = `translate(-50%, -50%) translate3d(${transform.x}px, ${transform.y}px, 0) rotate(${transform.rotation}deg) scale(${transform.scale})`;
+      });
+    }
+
+    function centerOverlay() {
+      transform.x = 0;
+      transform.y = 0;
+      transform.scale = 1;
+      transform.rotation = 0;
+      scheduleRender();
+    }
+
+    function setOverlayVisible(visible) {
+      overlayVisible = visible;
+      overlayShell.classList.toggle('hidden', !visible);
+      visibilityButton.textContent = visible ? 'Hide overlay' : 'Show overlay';
+      visibilityButton.classList.toggle('active', visible);
+      visibilityButton.setAttribute('aria-pressed', String(visible));
+    }
+
+    function loadImageFromFile(file) {
+      if (!file) {
+        return;
+      }
+
+      if (!file.type.startsWith('image/')) {
+        setStatus('<strong>Invalid file.</strong> Please select an image.', 'error');
+        return;
+      }
+
+      const objectUrl = URL.createObjectURL(file);
+      overlayImage.onload = () => {
+        imageLoaded = true;
+        overlayPlaceholder.style.display = 'none';
+        overlayImage.style.display = 'block';
+        centerOverlay();
+        setOverlayVisible(true);
+        setStatus('<strong>Image loaded.</strong> Drag to position, pinch to zoom, and trace along the live camera feed.');
+        URL.revokeObjectURL(objectUrl);
+      };
+
+      overlayImage.onerror = () => {
+        setStatus('<strong>Image error.</strong> The selected file could not be loaded.', 'error');
+        URL.revokeObjectURL(objectUrl);
+      };
+
+      overlayImage.src = objectUrl;
+    }
+
+    function getDistance(touchA, touchB) {
+      const dx = touchB.clientX - touchA.clientX;
+      const dy = touchB.clientY - touchA.clientY;
+      return Math.hypot(dx, dy);
+    }
+
+    function getAngle(touchA, touchB) {
+      return Math.atan2(touchB.clientY - touchA.clientY, touchB.clientX - touchA.clientX) * (180 / Math.PI);
+    }
+
+    function getCenter(touchA, touchB) {
+      return {
+        x: (touchA.clientX + touchB.clientX) / 2,
+        y: (touchA.clientY + touchB.clientY) / 2,
+      };
+    }
+
+    function isTouchOnOverlay(event) {
+      const target = event.target;
+      return overlayShell.contains(target) || overlayFrame.contains(target) || overlayImage.contains(target);
+    }
+
+    overlayShell.addEventListener('touchstart', (event) => {
+      if (!isTouchOnOverlay(event)) {
+        return;
+      }
+
+      event.preventDefault();
+      overlayShell.classList.add('dragging');
+
+      if (event.touches.length === 1) {
+        const touch = event.touches[0];
+        gesture.mode = 'drag';
+        gesture.pointerId = touch.identifier;
+        gesture.startX = touch.clientX;
+        gesture.startY = touch.clientY;
+        gesture.baseX = transform.x;
+        gesture.baseY = transform.y;
+      } else if (event.touches.length >= 2) {
+        const touchA = event.touches[0];
+        const touchB = event.touches[1];
+        const center = getCenter(touchA, touchB);
+
+        gesture.mode = 'gesture';
+        gesture.startDistance = getDistance(touchA, touchB);
+        gesture.startAngle = getAngle(touchA, touchB);
+        gesture.startScale = transform.scale;
+        gesture.startRotation = transform.rotation;
+        gesture.startCenterX = center.x;
+        gesture.startCenterY = center.y;
+        gesture.baseX = transform.x;
+        gesture.baseY = transform.y;
+      }
+    }, { passive: false });
+
+    overlayShell.addEventListener('touchmove', (event) => {
+      if (!gesture.mode) {
+        return;
+      }
+
+      event.preventDefault();
+
+      if (gesture.mode === 'drag' && event.touches.length === 1) {
+        const touch = event.touches[0];
+        transform.x = gesture.baseX + (touch.clientX - gesture.startX);
+        transform.y = gesture.baseY + (touch.clientY - gesture.startY);
+        scheduleRender();
+        return;
+      }
+
+      if (event.touches.length >= 2) {
+        const touchA = event.touches[0];
+        const touchB = event.touches[1];
+        const center = getCenter(touchA, touchB);
+        const distance = getDistance(touchA, touchB);
+        const angle = getAngle(touchA, touchB);
+
+        const scaleFactor = distance / Math.max(gesture.startDistance, 0.001);
+        transform.scale = Math.max(0.2, Math.min(4, gesture.startScale * scaleFactor));
+        transform.rotation = gesture.startRotation + (angle - gesture.startAngle);
+        transform.x = gesture.baseX + (center.x - gesture.startCenterX);
+        transform.y = gesture.baseY + (center.y - gesture.startCenterY);
+        scheduleRender();
+      }
+    }, { passive: false });
+
+    overlayShell.addEventListener('touchend', (event) => {
+      if (!event.touches.length) {
+        gesture.mode = null;
+        gesture.pointerId = null;
+        overlayShell.classList.remove('dragging');
+      } else if (event.touches.length === 1) {
+        const touch = event.touches[0];
+        gesture.mode = 'drag';
+        gesture.pointerId = touch.identifier;
+        gesture.startX = touch.clientX;
+        gesture.startY = touch.clientY;
+        gesture.baseX = transform.x;
+        gesture.baseY = transform.y;
+      }
+    }, { passive: false });
+
+    overlayShell.addEventListener('touchcancel', () => {
+      gesture.mode = null;
+      gesture.pointerId = null;
+      overlayShell.classList.remove('dragging');
+    }, { passive: false });
+
+    overlayShell.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      if (!imageLoaded) {
+        return;
+      }
+
+      event.preventDefault();
+      gesture.mode = 'mouse-drag';
+      gesture.startX = event.clientX;
+      gesture.startY = event.clientY;
+      gesture.baseX = transform.x;
+      gesture.baseY = transform.y;
+      overlayShell.classList.add('dragging');
+    });
+
+    window.addEventListener('mousemove', (event) => {
+      if (gesture.mode !== 'mouse-drag') {
+        return;
+      }
+
+      event.preventDefault();
+      transform.x = gesture.baseX + (event.clientX - gesture.startX);
+      transform.y = gesture.baseY + (event.clientY - gesture.startY);
+      scheduleRender();
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (gesture.mode === 'mouse-drag') {
+        gesture.mode = null;
+        overlayShell.classList.remove('dragging');
+      }
+    });
+
+    overlayShell.addEventListener('wheel', (event) => {
+      if (!imageLoaded) {
+        return;
+      }
+
+      event.preventDefault();
+      const direction = Math.sign(event.deltaY);
+      const factor = direction > 0 ? 0.94 : 1.06;
+      transform.scale = Math.max(0.2, Math.min(4, transform.scale * factor));
+      scheduleRender();
+    }, { passive: false });
+
+    opacitySlider.addEventListener('input', (event) => {
+      updateOpacity(Number(event.target.value));
+    });
+
+    uploadButton.addEventListener('click', () => {
+      fileInput.click();
+    });
+
+    fileInput.addEventListener('change', () => {
+      loadImageFromFile(fileInput.files && fileInput.files[0]);
+      fileInput.value = '';
+    });
+
+    resetButton.addEventListener('click', () => {
+      centerOverlay();
+      setStatus(imageLoaded ? '<strong>Position reset.</strong> The overlay is centered again.' : '<strong>Position reset.</strong> Upload an image to start tracing.');
+    });
+
+    visibilityButton.addEventListener('click', () => {
+      setOverlayVisible(!overlayVisible);
+    });
+
+    async function startCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraState('Camera: unavailable');
+        setStatus('<strong>Camera unavailable.</strong> This browser does not support camera access.', 'error');
+        return;
+      }
+
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+        });
+
+        camera.srcObject = cameraStream;
+        await camera.play();
+        setCameraState('Camera: active');
+        setStatus('<strong>Camera active.</strong> Upload an image to trace and use touch gestures to adjust it.');
+      } catch (error) {
+        const permissionDenied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
+        setCameraState(permissionDenied ? 'Camera: permission denied' : 'Camera: error');
+        setStatus(permissionDenied
+          ? '<strong>Camera permission denied.</strong> Allow camera access in the browser and reload the page.'
+          : `<strong>Camera error.</strong> ${error && error.message ? error.message : 'Unable to access the rear camera.'}`,
+          'error');
+      }
+    }
+
+    document.addEventListener('gesturestart', (event) => event.preventDefault());
+    document.addEventListener('touchmove', (event) => {
+      if (event.target.closest('.overlay-shell')) {
+        event.preventDefault();
+      }
+    }, { passive: false });
+
+    window.addEventListener('resize', () => {
+      if (!imageLoaded) {
+        return;
+      }
+
+      scheduleRender();
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach((track) => track.stop());
+      }
+
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+      }
+    });
+
+    updateOpacity(Number(opacitySlider.value));
+    setOverlayVisible(true);
+    overlayImage.style.display = 'none';
+    overlayPlaceholder.style.display = 'grid';
+    centerOverlay();
+    startCamera();
+  </script>
+</body>
+</html>
