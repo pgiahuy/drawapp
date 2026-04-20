@@ -211,7 +211,7 @@
 
     .controls-row {
       display: grid;
-      grid-template-columns: 1fr auto auto auto;
+      grid-template-columns: 1fr auto auto;
       gap: 10px;
       align-items: center;
     }
@@ -242,7 +242,6 @@
     }
 
     .button,
-    .toggle,
     .file-trigger {
       appearance: none;
       border: 1px solid rgba(255, 255, 255, 0.12);
@@ -258,7 +257,6 @@
     }
 
     .button:active,
-    .toggle:active,
     .file-trigger:active {
       transform: translateY(1px) scale(0.99);
     }
@@ -267,26 +265,6 @@
     .file-trigger {
       background: linear-gradient(180deg, rgba(104, 213, 255, 0.22), rgba(104, 213, 255, 0.1));
       border-color: rgba(104, 213, 255, 0.36);
-    }
-
-    .toggle.active {
-      border-color: rgba(156, 240, 255, 0.42);
-      background: rgba(104, 213, 255, 0.16);
-      color: #ffffff;
-    }
-
-    .instruction-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.45;
-    }
-
-    .instruction-row strong {
-      color: var(--text);
     }
 
     input[type="file"] {
@@ -307,10 +285,6 @@
 
       .controls-row > :first-child {
         grid-column: 1 / -1;
-      }
-
-      .instruction-row {
-        flex-direction: column;
       }
 
       .status {
@@ -341,16 +315,7 @@
     </div>
 
     <div class="hud">
-      <div class="status" id="statusBox">
-        <div id="statusText"><strong>Ready.</strong> Allow camera access and upload an image to begin tracing.</div>
-      </div>
-
-      <div class="controls">
-        <div class="instruction-row">
-          <div><strong>Instructions:</strong> upload an image, drag it into place, pinch to zoom, and trace over the live camera feed.</div>
-          <div id="cameraState">Camera: starting…</div>
-        </div>
-
+      <div class="controls" id="controlsPanel">
         <div class="controls-row">
           <div class="control-group">
             <div class="label">Overlay opacity</div>
@@ -358,8 +323,6 @@
           </div>
           <div class="value" id="opacityValue">0.40</div>
           <button class="button primary" id="uploadButton" type="button">Upload image</button>
-          <button class="button" id="resetButton" type="button">Reset position</button>
-          <button class="toggle active" id="visibilityButton" type="button" aria-pressed="true">Hide overlay</button>
         </div>
         <input id="fileInput" type="file" accept="image/*" />
       </div>
@@ -370,7 +333,6 @@
     const camera = document.getElementById('camera');
     const statusBox = document.getElementById('statusBox');
     const statusText = document.getElementById('statusText');
-    const cameraState = document.getElementById('cameraState');
     const overlayShell = document.getElementById('overlayShell');
     const overlayFrame = document.getElementById('overlayFrame');
     const overlayImage = document.getElementById('overlayImage');
@@ -378,8 +340,6 @@
     const opacitySlider = document.getElementById('opacitySlider');
     const opacityValue = document.getElementById('opacityValue');
     const uploadButton = document.getElementById('uploadButton');
-    const resetButton = document.getElementById('resetButton');
-    const visibilityButton = document.getElementById('visibilityButton');
     const fileInput = document.getElementById('fileInput');
 
     let cameraStream = null;
@@ -403,20 +363,18 @@
       startAngle: 0,
       startScale: 1,
       startRotation: 0,
-      startCenterX: 0,
-      startCenterY: 0,
       baseX: 0,
       baseY: 0,
       pointerId: null,
     };
 
     function setStatus(message, kind = 'info') {
+      if (!statusText || !statusBox) {
+        return;
+      }
+
       statusText.innerHTML = message;
       statusBox.classList.toggle('error', kind === 'error');
-    }
-
-    function setCameraState(message) {
-      cameraState.textContent = message;
     }
 
     function updateOpacity(value) {
@@ -449,9 +407,6 @@
     function setOverlayVisible(visible) {
       overlayVisible = visible;
       overlayShell.classList.toggle('hidden', !visible);
-      visibilityButton.textContent = visible ? 'Hide overlay' : 'Show overlay';
-      visibilityButton.classList.toggle('active', visible);
-      visibilityButton.setAttribute('aria-pressed', String(visible));
     }
 
     function loadImageFromFile(file) {
@@ -493,13 +448,6 @@
       return Math.atan2(touchB.clientY - touchA.clientY, touchB.clientX - touchA.clientX) * (180 / Math.PI);
     }
 
-    function getCenter(touchA, touchB) {
-      return {
-        x: (touchA.clientX + touchB.clientX) / 2,
-        y: (touchA.clientY + touchB.clientY) / 2,
-      };
-    }
-
     function isTouchOnOverlay(event) {
       const target = event.target;
       return overlayShell.contains(target) || overlayFrame.contains(target) || overlayImage.contains(target);
@@ -524,17 +472,12 @@
       } else if (event.touches.length >= 2) {
         const touchA = event.touches[0];
         const touchB = event.touches[1];
-        const center = getCenter(touchA, touchB);
 
         gesture.mode = 'gesture';
         gesture.startDistance = getDistance(touchA, touchB);
         gesture.startAngle = getAngle(touchA, touchB);
         gesture.startScale = transform.scale;
         gesture.startRotation = transform.rotation;
-        gesture.startCenterX = center.x;
-        gesture.startCenterY = center.y;
-        gesture.baseX = transform.x;
-        gesture.baseY = transform.y;
       }
     }, { passive: false });
 
@@ -556,15 +499,12 @@
       if (event.touches.length >= 2) {
         const touchA = event.touches[0];
         const touchB = event.touches[1];
-        const center = getCenter(touchA, touchB);
         const distance = getDistance(touchA, touchB);
         const angle = getAngle(touchA, touchB);
 
         const scaleFactor = distance / Math.max(gesture.startDistance, 0.001);
         transform.scale = Math.max(0.2, Math.min(4, gesture.startScale * scaleFactor));
         transform.rotation = gesture.startRotation + (angle - gesture.startAngle);
-        transform.x = gesture.baseX + (center.x - gesture.startCenterX);
-        transform.y = gesture.baseY + (center.y - gesture.startCenterY);
         scheduleRender();
       }
     }, { passive: false });
@@ -652,18 +592,8 @@
       fileInput.value = '';
     });
 
-    resetButton.addEventListener('click', () => {
-      centerOverlay();
-      setStatus(imageLoaded ? '<strong>Position reset.</strong> The overlay is centered again.' : '<strong>Position reset.</strong> Upload an image to start tracing.');
-    });
-
-    visibilityButton.addEventListener('click', () => {
-      setOverlayVisible(!overlayVisible);
-    });
-
     async function startCamera() {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setCameraState('Camera: unavailable');
         setStatus('<strong>Camera unavailable.</strong> This browser does not support camera access.', 'error');
         return;
       }
@@ -680,11 +610,9 @@
 
         camera.srcObject = cameraStream;
         await camera.play();
-        setCameraState('Camera: active');
         setStatus('<strong>Camera active.</strong> Upload an image to trace and use touch gestures to adjust it.');
       } catch (error) {
         const permissionDenied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
-        setCameraState(permissionDenied ? 'Camera: permission denied' : 'Camera: error');
         setStatus(permissionDenied
           ? '<strong>Camera permission denied.</strong> Allow camera access in the browser and reload the page.'
           : `<strong>Camera error.</strong> ${error && error.message ? error.message : 'Unable to access the rear camera.'}`,
