@@ -31,6 +31,20 @@
       background: #000;
     }
 
+    .mirror-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #000;
+      z-index: 1;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
     .overlay {
       pointer-events: none;
     }
@@ -67,13 +81,53 @@
       right: 10px;
       top: calc(env(safe-area-inset-top, 0px) + 10px);
       display: flex;
-      align-items: center;
+      align-items: stretch;
+      flex-direction: column;
       gap: 10px;
       padding: 10px;
       border-radius: 12px;
       background: rgba(0, 0, 0, 0.55);
       border: 1px solid rgba(255, 255, 255, 0.16);
       backdrop-filter: blur(8px);
+      z-index: 20;
+    }
+
+    .control-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .mode-select {
+      width: 100%;
+      min-height: 40px;
+      padding: 9px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+      font: inherit;
+      outline: none;
+    }
+
+    .mode-select option {
+      background: #121212;
+      color: #fff;
+    }
+
+    .save-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      background: rgba(255, 255, 255, 0.18);
+      color: #fff;
+      border-radius: 10px;
+      padding: 9px 12px;
+      min-height: 40px;
+      text-decoration: none;
+      white-space: nowrap;
     }
 
     .slider {
@@ -113,6 +167,7 @@
 <body>
   <div class="app">
     <video id="camera" class="camera" autoplay muted playsinline webkit-playsinline></video>
+    <canvas id="mirrorCanvas" class="mirror-canvas hidden" aria-label="Convex mirror preview"></canvas>
 
     <div class="overlay">
       <div id="overlayShell" class="overlay-shell" aria-label="Tracing overlay">
@@ -121,24 +176,50 @@
     </div>
 
     <div class="controls">
-      <input id="opacitySlider" class="slider" type="range" min="0" max="1" step="0.01" value="0.4" aria-label="Overlay opacity" />
-      <button id="uploadButton" class="upload" type="button">Upload</button>
+      <select id="modeSelect" class="mode-select" aria-label="App mode">
+        <option value="trace" selected>Trace mode</option>
+        <option value="convex">Convex mirror selfie</option>
+      </select>
+
+      <div id="traceControls" class="control-row">
+        <input id="opacitySlider" class="slider" type="range" min="0" max="1" step="0.01" value="0.4" aria-label="Overlay opacity" />
+        <button id="uploadButton" class="upload" type="button">Upload</button>
+      </div>
+
+      <div id="mirrorControls" class="control-row hidden">
+        <button id="captureButton" class="upload" type="button">Capture</button>
+        <a id="saveLink" class="save-link hidden" href="#" download="convex-selfie.jpg">Save</a>
+      </div>
+
       <input id="fileInput" type="file" accept="image/*" />
     </div>
   </div>
 
   <script>
     const camera = document.getElementById('camera');
+    const mirrorCanvas = document.getElementById('mirrorCanvas');
     const overlayShell = document.getElementById('overlayShell');
     const overlayImage = document.getElementById('overlayImage');
+    const modeSelect = document.getElementById('modeSelect');
+    const traceControls = document.getElementById('traceControls');
+    const mirrorControls = document.getElementById('mirrorControls');
     const opacitySlider = document.getElementById('opacitySlider');
     const uploadButton = document.getElementById('uploadButton');
+    const captureButton = document.getElementById('captureButton');
+    const saveLink = document.getElementById('saveLink');
     const fileInput = document.getElementById('fileInput');
 
     let cameraStream = null;
     let imageLoaded = false;
     let renderPending = false;
     let rafId = 0;
+    let mirrorRafId = 0;
+    let currentMode = 'trace';
+    let mirrorMap = null;
+    let mirrorOutput = null;
+    const processCanvas = document.createElement('canvas');
+    const processCtx = processCanvas.getContext('2d', { willReadFrequently: true });
+    const mirrorCtx = mirrorCanvas.getContext('2d', { alpha: false, willReadFrequently: true });
 
     const transform = {
       x: 0,
@@ -185,6 +266,144 @@
       const clamped = Math.min(1, Math.max(0, Number(value)));
       opacitySlider.value = String(clamped);
       overlayShell.style.setProperty('--overlay-opacity', String(clamped));
+    }
+
+    function updateModeUi() {
+      const inTraceMode = currentMode === 'trace';
+      camera.classList.toggle('hidden', !inTraceMode);
+      mirrorCanvas.classList.toggle('hidden', inTraceMode);
+      overlayShell.classList.toggle('hidden', !inTraceMode);
+      traceControls.classList.toggle('hidden', !inTraceMode);
+      mirrorControls.classList.toggle('hidden', inTraceMode);
+
+      if (inTraceMode) {
+        saveLink.classList.add('hidden');
+      }
+    }
+
+    function stopCamera() {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach((track) => track.stop());
+        cameraStream = null;
+      }
+
+      camera.srcObject = null;
+    }
+
+    function resizeMirrorProcessing() {
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const cssWidth = Math.max(1, window.innerWidth);
+      const cssHeight = Math.max(1, window.innerHeight);
+      const width = Math.max(240, Math.min(720, Math.round(cssWidth * dpr * 0.55)));
+      const height = Math.max(240, Math.min(1280, Math.round(cssHeight * dpr * 0.55)));
+
+      if (processCanvas.width !== width || processCanvas.height !== height) {
+        processCanvas.width = width;
+        processCanvas.height = height;
+        mirrorCanvas.width = width;
+        mirrorCanvas.height = height;
+        mirrorMap = null;
+        mirrorOutput = null;
+      }
+    }
+
+    function buildMirrorMap(width, height) {
+      const map = new Uint32Array(width * height);
+      const cx = (width - 1) * 0.5;
+      const cy = (height - 1) * 0.5;
+      const invCx = 1 / Math.max(cx, 1);
+      const invCy = 1 / Math.max(cy, 1);
+
+      for (let y = 0; y < height; y += 1) {
+        const ny = (y - cy) * invCy;
+
+        for (let x = 0; x < width; x += 1) {
+          const nx = (x - cx) * invCx;
+          const radius = Math.min(1, Math.hypot(nx, ny));
+          const sourceRadius = Math.pow(radius, 1.55);
+          const theta = Math.atan2(ny, nx);
+
+          const warpedNx = Math.cos(theta) * sourceRadius;
+          const warpedNy = Math.sin(theta) * sourceRadius;
+          const sx = Math.max(0, Math.min(width - 1, Math.round((warpedNx * 0.5 + 0.5) * (width - 1))));
+          const sy = Math.max(0, Math.min(height - 1, Math.round((warpedNy * 0.5 + 0.5) * (height - 1))));
+          map[y * width + x] = (sy * width) + sx;
+        }
+      }
+
+      return map;
+    }
+
+    function renderConvexFrame() {
+      if (currentMode !== 'convex') {
+        mirrorRafId = 0;
+        return;
+      }
+
+      if (camera.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && processCtx && mirrorCtx) {
+        resizeMirrorProcessing();
+
+        const width = processCanvas.width;
+        const height = processCanvas.height;
+
+        if (!mirrorMap || mirrorMap.length !== width * height) {
+          mirrorMap = buildMirrorMap(width, height);
+          mirrorOutput = mirrorCtx.createImageData(width, height);
+        }
+
+        // Mirror the input to behave like a selfie camera.
+        processCtx.save();
+        processCtx.scale(-1, 1);
+        processCtx.drawImage(camera, -width, 0, width, height);
+        processCtx.restore();
+
+        const source = processCtx.getImageData(0, 0, width, height).data;
+        const output = mirrorOutput.data;
+
+        for (let i = 0; i < mirrorMap.length; i += 1) {
+          const si = mirrorMap[i] * 4;
+          const di = i * 4;
+          output[di] = source[si];
+          output[di + 1] = source[si + 1];
+          output[di + 2] = source[si + 2];
+          output[di + 3] = 255;
+        }
+
+        mirrorCtx.putImageData(mirrorOutput, 0, 0);
+      }
+
+      mirrorRafId = requestAnimationFrame(renderConvexFrame);
+    }
+
+    function startConvexLoop() {
+      if (mirrorRafId) {
+        cancelAnimationFrame(mirrorRafId);
+      }
+
+      mirrorRafId = requestAnimationFrame(renderConvexFrame);
+    }
+
+    async function switchMode(mode) {
+      if (mode !== 'trace' && mode !== 'convex') {
+        return;
+      }
+
+      currentMode = mode;
+      updateModeUi();
+      saveLink.classList.add('hidden');
+
+      try {
+        await startCamera();
+      } catch (error) {
+        console.error('Switch mode error:', error);
+      }
+
+      if (currentMode === 'convex') {
+        startConvexLoop();
+      } else if (mirrorRafId) {
+        cancelAnimationFrame(mirrorRafId);
+        mirrorRafId = 0;
+      }
     }
 
     function loadImageFromFile(file) {
@@ -362,16 +581,48 @@
       updateOpacity(event.target.value);
     });
 
+    modeSelect.addEventListener('change', (event) => {
+      switchMode(event.target.value);
+    });
+
+    captureButton.addEventListener('click', () => {
+      if (currentMode !== 'convex') {
+        return;
+      }
+
+      if (!mirrorCanvas.width || !mirrorCanvas.height) {
+        return;
+      }
+
+      const stamp = new Date();
+      const filename = `convex-selfie-${stamp.getFullYear()}${String(stamp.getMonth() + 1).padStart(2, '0')}${String(stamp.getDate()).padStart(2, '0')}-${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}${String(stamp.getSeconds()).padStart(2, '0')}.jpg`;
+      const imageDataUrl = mirrorCanvas.toDataURL('image/jpeg', 0.92);
+
+      saveLink.href = imageDataUrl;
+      saveLink.download = filename;
+      saveLink.classList.remove('hidden');
+    });
+
+    window.addEventListener('resize', () => {
+      if (currentMode === 'convex') {
+        resizeMirrorProcessing();
+      }
+    });
+
     async function startCamera() {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         return;
       }
 
+      stopCamera();
+
       try {
+        const facing = currentMode === 'convex' ? 'user' : 'environment';
+
         cameraStream = await navigator.mediaDevices.getUserMedia({
           audio: false,
           video: {
-            facingMode: { ideal: 'environment' },
+            facingMode: { ideal: facing },
             width: { ideal: 1920 },
             height: { ideal: 1080 },
           },
@@ -392,17 +643,20 @@
     }, { passive: false });
 
     window.addEventListener('beforeunload', () => {
-      if (cameraStream) {
-        cameraStream.getTracks().forEach((track) => track.stop());
-      }
+      stopCamera();
 
       if (rafId) {
         cancelAnimationFrame(rafId);
+      }
+
+      if (mirrorRafId) {
+        cancelAnimationFrame(mirrorRafId);
       }
     });
 
     updateOpacity(opacitySlider.value);
     centerOverlay();
+    updateModeUi();
     startCamera();
   </script>
 </body>
